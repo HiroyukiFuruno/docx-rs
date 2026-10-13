@@ -50,6 +50,10 @@ pub fn hello() -> Result<(), DocxError> {
 `read_docx(&bytes)` rejects packages whose ASCII ZIP part names conflict with
 their resolved filenames.
 
+`Pic::crop(left, top, right, bottom)` and JavaScript's `Image.crop(...)` use
+thousandths of a percent: `(25000, 0, 25000, 0)` keeps the middle half.
+Reading preserves these source offsets, including negative outsets, per picture.
+
 ### Browser
 
 ```javascript
