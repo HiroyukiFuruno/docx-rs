@@ -45,6 +45,26 @@ fn read_field_char(attributes: &[OwnedAttribute]) -> Result<FieldChar, ReaderErr
     }
 }
 
+// Namespace URIs identify run vocabularies; prefixes are arbitrary and scoped.
+// Keep undeclared conventional prefixes for legacy XML-fragment callers.
+fn has_namespace(name: &OwnedName, namespaces: &[&str], legacy_prefix: &str) -> bool {
+    match name.namespace.as_deref() {
+        Some(namespace) => namespaces.contains(&namespace),
+        None => name.prefix.as_deref() == Some(legacy_prefix),
+    }
+}
+
+pub(super) fn is_word_name(name: &OwnedName) -> bool {
+    has_namespace(
+        name,
+        &[
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+            "http://purl.oclc.org/ooxml/wordprocessingml/main",
+        ],
+        "w",
+    )
+}
+
 impl ElementReader for Run {
     fn read<R: Read>(
         r: &mut EventReader<R>,
@@ -58,8 +78,8 @@ impl ElementReader for Run {
                 Ok(XmlEvent::StartElement {
                     attributes, name, ..
                 }) => {
-                    match name.prefix.as_deref() {
-                        Some("w") => {
+                    match () {
+                        _ if is_word_name(&name) => {
                             let e = XMLElement::from_str(&name.local_name).unwrap();
 
                             ignore::ignore_element(e.clone(), XMLElement::RunPropertyChange, r);
@@ -88,8 +108,13 @@ impl ElementReader for Run {
                                 XMLElement::Text => text_state = TextState::Text,
                                 XMLElement::DeleteText => text_state = TextState::Delete,
                                 XMLElement::Break => {
-                                    if let Some(a) = attributes.first() {
-                                        run = run.add_break(BreakType::from_str(&a.value)?)
+                                    if let Some(attribute) = attributes.iter().find(|attribute| {
+                                        attribute.name.local_name == "type"
+                                            && (is_word_name(&attribute.name)
+                                                || (attribute.name.namespace.is_none()
+                                                    && attribute.name.prefix.is_none()))
+                                    }) {
+                                        run = run.add_break(BreakType::from_str(&attribute.value)?)
                                     } else {
                                         run = run.add_break(BreakType::TextWrapping)
                                     }
@@ -114,7 +139,9 @@ impl ElementReader for Run {
                                             run.children.push(RunChild::InstrTextString(c));
                                             break;
                                         }
-                                        Ok(XmlEvent::EndElement { name, .. }) => {
+                                        Ok(XmlEvent::EndElement { name, .. })
+                                            if is_word_name(&name) =>
+                                        {
                                             let e = XMLElement::from_str(&name.local_name).unwrap();
                                             match e {
                                                 XMLElement::Run => {
@@ -123,6 +150,9 @@ impl ElementReader for Run {
                                                 _ => {}
                                             }
                                         }
+                                        Ok(XmlEvent::EndDocument) => {
+                                            return Err(ReaderError::XMLReadError)
+                                        }
                                         Err(_) => return Err(ReaderError::XMLReadError),
                                         _ => {}
                                     }
@@ -130,7 +160,12 @@ impl ElementReader for Run {
                                 _ => {}
                             }
                         }
-                        Some("mc") => {
+                        _ if has_namespace(
+                            &name,
+                            &["http://schemas.openxmlformats.org/markup-compatibility/2006"],
+                            "mc",
+                        ) =>
+                        {
                             let e = McXMLElement::from_str(&name.local_name).unwrap();
                             match e {
                                 McXMLElement::Fallback => {
@@ -139,7 +174,7 @@ impl ElementReader for Run {
                                 _ => {}
                             }
                         }
-                        Some("v") => {
+                        _ if has_namespace(&name, &["urn:schemas-microsoft-com:vml"], "v") => {
                             let e = VXMLElement::from_str(&name.local_name).unwrap();
                             match e {
                                 // Experimental For now support only imageData in shape
@@ -172,7 +207,7 @@ impl ElementReader for Run {
                     }
                     _ => {}
                 },
-                Ok(XmlEvent::EndElement { name, .. }) => {
+                Ok(XmlEvent::EndElement { name, .. }) if is_word_name(&name) => {
                     let e = XMLElement::from_str(&name.local_name).unwrap();
                     match e {
                         XMLElement::Run => {
@@ -182,6 +217,7 @@ impl ElementReader for Run {
                         _ => {}
                     }
                 }
+                Ok(XmlEvent::EndDocument) => return Err(ReaderError::XMLReadError),
                 Err(_) => return Err(ReaderError::XMLReadError),
                 _ => {}
             }
@@ -195,6 +231,129 @@ mod tests {
     use super::*;
     #[cfg(test)]
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn read_word_containers_ignore_math_and_foreign_runs() {
+        for container in ["p", "hyperlink", "ins", "del", "moveFrom", "moveTo", "sdt"] {
+            for prefix in ["w", "text"] {
+                let read_container =
+                    |xml: &str| -> Result<serde_json::Value, ReaderError> {
+                        let mut reader = EventReader::new(xml.as_bytes());
+                        match container {
+                            "p" => Paragraph::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "hyperlink" => Hyperlink::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "ins" => Insert::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "del" => Delete::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "moveFrom" => MoveFrom::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "moveTo" => MoveTo::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            "sdt" => StructuredDataTag::read(&mut reader, &[])
+                                .map(|v| serde_json::to_value(v).unwrap()),
+                            _ => unreachable!(),
+                        }
+                    };
+                let before =
+                    format!("<{prefix}:r><{prefix}:t>Before equation</{prefix}:t></{prefix}:r>");
+                let after =
+                    format!("<{prefix}:r><{prefix}:t>After equation</{prefix}:t></{prefix}:r>");
+                let wrap = |middle: &str| {
+                    format!(
+                        r#"<{prefix}:{container} xmlns:{prefix}="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:f="urn:metadata">{before}{middle}{after}</{prefix}:{container}>"#
+                    )
+                };
+                let control = read_container(&wrap("")).unwrap();
+                let math = r#"<m:oMath><m:r><m:t>E=mc</m:t></m:r><m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath><f:r><f:t>Metadata</f:t></f:r>"#;
+                let tail = wrap("").replace(
+                    &format!("</{prefix}:{container}>"),
+                    &format!("{math}</{prefix}:{container}>"),
+                );
+                for xml in [wrap(math), tail] {
+                    let actual = read_container(&xml).unwrap();
+                    assert_eq!(actual, control, "container {container}, prefix {prefix}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_run_keeps_page_breaks_with_local_namespace_declarations() {
+        for prefix in ["text", "type"] {
+            let xml = format!(
+                r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>Before</w:t><{prefix}:br xmlns:{prefix}="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:f="urn:metadata" f:type="column" {prefix}:clear="all" {prefix}:type="page"/><w:t>After</w:t></w:r>"#
+            );
+            let mut reader = EventReader::new(xml.as_bytes());
+            let run = Run::read(&mut reader, &[]).unwrap();
+            assert_eq!(
+                run,
+                Run::new()
+                    .add_text("Before")
+                    .add_break(BreakType::Page)
+                    .add_text("After")
+            );
+        }
+    }
+
+    #[test]
+    fn read_run_local_declarations_do_not_replace_property_values() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:rPr><val:b xmlns:val="http://schemas.openxmlformats.org/wordprocessingml/2006/main" val:val="0"/></w:rPr><w:t>Regular report text</w:t></w:r>"#;
+        let mut reader = EventReader::new(xml.as_bytes());
+        assert_eq!(
+            Run::read(&mut reader, &[]).unwrap(),
+            Run::new().disable_bold().add_text("Regular report text")
+        );
+    }
+
+    #[test]
+    fn read_run_uses_wordprocessing_namespace_with_any_prefix() {
+        for (opening, prefix) in [
+            (
+                "xmlns:ns0=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"",
+                "ns0:",
+            ),
+            (
+                "xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"",
+                "",
+            ),
+            (
+                "xmlns:text=\"http://purl.oclc.org/ooxml/wordprocessingml/main\"",
+                "text:",
+            ),
+        ] {
+            let xml = format!("<{prefix}r {opening}><{prefix}rPr><{prefix}b/></{prefix}rPr><{prefix}t>Quarterly report</{prefix}t><{prefix}tab/><{prefix}t>Approved</{prefix}t></{prefix}r>");
+            let mut reader = EventReader::new(xml.as_bytes());
+            let run = Run::read(&mut reader, &[]).unwrap();
+            let expected = Run::new()
+                .bold()
+                .add_text("Quarterly report")
+                .add_tab()
+                .add_text("Approved");
+            assert_eq!(run, expected, "prefix {prefix}");
+        }
+    }
+
+    #[test]
+    fn read_run_ignores_foreign_names_and_restores_scoped_bindings() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:f="urn:foreign">
+          <w:t>Before</w:t><f:r><f:t>Foreign</f:t></f:r>
+          <w:t xmlns:w="urn:foreign">Shadowed</w:t>
+          <w:t>After</w:t>
+        </w:r>"#;
+        let mut reader = EventReader::new(xml.as_bytes());
+        let run = Run::read(&mut reader, &[]).unwrap();
+        assert_eq!(run, Run::new().add_text("Before").add_text("After"));
+    }
+
+    #[test]
+    fn read_run_rejects_an_unrecognized_root_without_looping_at_eof() {
+        let xml = r#"<f:r xmlns:f="urn:metadata"><f:t>Metadata</f:t></f:r>"#;
+        let mut reader = EventReader::new(xml.as_bytes());
+        assert!(Run::read(&mut reader, &[]).is_err());
+    }
 
     #[test]
     fn test_read_size_color() {
