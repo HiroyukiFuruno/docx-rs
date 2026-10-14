@@ -95,6 +95,10 @@ writeFileSync("hello.docx", Buffer.from(buffer));
 - [Image](https://github.com/bokuweb/docx-rs/blob/master/docx-core/examples/image_inline.rs)
 - [History](https://github.com/bokuweb/docx-rs/blob/master/docx-core/examples/history.rs)
 
+Footnote reference parsing preserves `w:id` and optional `w:customMarkFollows`
+without consuming adjacent text. The Rust `FootnoteReference::custom_mark_follows`
+builder writes the flag; JSON includes `customMarkFollows` only when specified.
+
 ## Development
 
 ### Requirements
