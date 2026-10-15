@@ -147,6 +147,12 @@ impl ElementReader for Run {
                                 XMLElement::CarriageReturn => {
                                     run = run.add_carriage_return();
                                 }
+                                XMLElement::NoBreakHyphen => {
+                                    run = run.add_no_break_hyphen();
+                                }
+                                XMLElement::SoftHyphen => {
+                                    run = run.add_soft_hyphen();
+                                }
                                 XMLElement::Drawing => {
                                     if let Ok(drawing) = Drawing::read(r, &attributes) {
                                         run = run.add_drawing(drawing);
@@ -256,6 +262,76 @@ mod tests {
     use super::*;
     #[cfg(test)]
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn hyphen_runs_keep_nonbreaking_and_discretionary_positions() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>long</w:t><w:noBreakHyphen/><w:t>term co</w:t><w:softHyphen/><w:t>operate</w:t><w:noBreakHyphen/></w:r>"#;
+        let run = Run::read(&mut EventReader::new(xml.as_bytes()), &[]).unwrap();
+        let children = serde_json::to_value(&run).unwrap()["children"].clone();
+        assert_eq!(
+            children,
+            serde_json::json!([
+                {"type":"text", "data":{"text":"long", "preserveSpace":true}},
+                {"type":"noBreakHyphen"},
+                {"type":"text", "data":{"text":"term co", "preserveSpace":true}},
+                {"type":"softHyphen"},
+                {"type":"text", "data":{"text":"operate", "preserveSpace":true}},
+                {"type":"noBreakHyphen"}
+            ])
+        );
+    }
+
+    #[test]
+    fn hyphen_runs_follow_namespace_uris() {
+        for namespace in [
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+            "http://purl.oclc.org/ooxml/wordprocessingml/main",
+        ] {
+            for prefix in ["w", "text", ""] {
+                let colon = if prefix.is_empty() { "" } else { ":" };
+                let declaration = if prefix.is_empty() {
+                    "xmlns".to_string()
+                } else {
+                    format!("xmlns:{prefix}")
+                };
+                let xml = format!(
+                    r#"<{prefix}{colon}p {declaration}="{namespace}"><{prefix}{colon}r><{prefix}{colon}noBreakHyphen/><{prefix}{colon}t>e</{prefix}{colon}t><{prefix}{colon}noBreakHyphen/><{prefix}{colon}t>mail</{prefix}{colon}t><{prefix}{colon}softHyphen/></{prefix}{colon}r></{prefix}{colon}p>"#
+                );
+                let paragraph =
+                    Paragraph::read(&mut EventReader::new(xml.as_bytes()), &[]).unwrap();
+                assert_eq!(
+                    paragraph.raw_text(),
+                    "\u{2011}e\u{2011}mail\u{00ad}",
+                    "{namespace}, {prefix}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hyphen_runs_round_trip_as_elements() {
+        use crate::documents::BuildXML;
+
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:t>well</w:t><w:noBreakHyphen/><w:t>known</w:t><w:softHyphen/></w:r>"#;
+        let run = Run::read(&mut EventReader::new(xml.as_bytes()), &[]).unwrap();
+        let output = String::from_utf8(run.build()).unwrap();
+        assert!(output.contains("<w:noBreakHyphen />"), "{output}");
+        assert!(output.contains("<w:softHyphen />"), "{output}");
+        let wrapped = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{output}</w:document>"#
+        );
+        assert_eq!(
+            Run::read(&mut EventReader::new(wrapped.as_bytes()), &[]).unwrap(),
+            run
+        );
+    }
+
+    #[test]
+    fn hyphen_runs_ignore_foreign_lookalikes() {
+        let xml = r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:f="urn:metadata"><w:t>metadata</w:t><f:noBreakHyphen/><f:softHyphen/><w:t>only</w:t></w:r>"#;
+        let run = Run::read(&mut EventReader::new(xml.as_bytes()), &[]).unwrap();
+        assert_eq!(run, Run::new().add_text("metadata").add_text("only"));
+    }
 
     #[test]
     fn read_word_containers_ignore_math_and_foreign_runs() {
@@ -596,6 +672,27 @@ mod tests {
             run,
             Run {
                 children: vec![RunChild::CarriageReturn(CarriageReturn::new())],
+                run_property: RunProperty::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_read_hyphens() {
+        let c = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:r><w:t>long</w:t><w:noBreakHyphen/><w:t>term</w:t><w:softHyphen/></w:r>
+</w:document>"#;
+        let mut parser = EventReader::new(c.as_bytes());
+        let run = Run::read(&mut parser, &[]).unwrap();
+        assert_eq!(
+            run,
+            Run {
+                children: vec![
+                    RunChild::Text(Text::new("long")),
+                    RunChild::NoBreakHyphen(NoBreakHyphen::new()),
+                    RunChild::Text(Text::new("term")),
+                    RunChild::SoftHyphen(SoftHyphen::new()),
+                ],
                 run_property: RunProperty::default(),
             }
         );
