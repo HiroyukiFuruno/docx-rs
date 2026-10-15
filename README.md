@@ -54,6 +54,11 @@ their resolved filenames.
 thousandths of a percent: `(25000, 0, 25000, 0)` keeps the middle half.
 Reading preserves these source offsets, including negative outsets, per picture.
 
+This reader fork backports [upstream hyphen support](https://github.com/bokuweb/docx-rs/pull/928):
+`Run::add_no_break_hyphen()` / `add_soft_hyphen()` (JavaScript:
+`addNoBreakHyphen()` / `addSoftHyphen()`) preserve the corresponding XML elements.
+`Paragraph::raw_text()` returns them as U+2011 / U+00AD.
+
 ### Browser
 
 ```javascript
