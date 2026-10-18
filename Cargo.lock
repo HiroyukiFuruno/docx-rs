@@ -239,32 +239,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
-name = "docx-rs"
-version = "0.4.22"
-dependencies = [
- "base64",
- "crc32fast",
- "criterion",
- "image",
- "insta",
- "pretty_assertions",
- "quick-xml",
- "serde",
- "serde_json",
- "smallvec",
- "thiserror",
- "ts-rs",
- "wasm-bindgen",
- "zip",
-]
-
-[[package]]
 name = "docx-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "docx-rs",
  "emf-core",
+ "office2pdf-docx-rs",
  "wasm-bindgen",
  "wmf-core",
 ]
@@ -511,6 +491,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "office2pdf-docx-rs"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "crc32fast",
+ "criterion",
+ "image",
+ "insta",
+ "pretty_assertions",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thiserror",
+ "ts-rs",
+ "wasm-bindgen",
+ "zip",
 ]
 
 [[package]]
