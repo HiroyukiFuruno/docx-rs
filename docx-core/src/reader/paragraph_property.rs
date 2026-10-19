@@ -178,7 +178,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
 
-
     #[test]
     fn test_read_word_wrap() {
         // `w:val="0"` asks for character-level breaking of East Asian text.

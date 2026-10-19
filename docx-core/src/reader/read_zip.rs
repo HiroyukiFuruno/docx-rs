@@ -36,6 +36,7 @@ pub(crate) fn validate_ascii_part_names(
         || zip::result::ZipError::InvalidArchive("Invalid ZIP filename header".into());
     for index in 0..archive.len() {
         let entry = archive.by_index_raw(index)?;
+        let resolved_name = entry.name()?;
         for (start, length_offset, name_offset) in [
             (entry.header_start(), 26, 30),
             (entry.central_header_start(), 28, 46),
@@ -49,7 +50,7 @@ pub(crate) fn validate_ascii_part_names(
             let raw_name = header
                 .get(name_offset..name_offset + name_length)
                 .ok_or_else(invalid_header)?;
-            if raw_name.is_ascii() && raw_name != entry.name().as_bytes() {
+            if raw_name.is_ascii() && raw_name != resolved_name.as_bytes() {
                 return Err(zip::result::ZipError::InvalidArchive(
                     "ASCII ZIP part name disagrees with resolved filename".into(),
                 )
